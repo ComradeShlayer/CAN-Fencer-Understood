@@ -19,34 +19,54 @@ res.raise_for_status()
 soup = BeautifulSoup(res.text, "html.parser")
 
 tournament_links = []
-for row in soup.select("table tr"):
-    
-    cells = row.select("td")
-    if not cells:
-        continue
-    print("Row cells:")
+page = 1
+max_pages = 10
 
-    for i, cell in enumerate(cells):
-        print(f"  Column {i}: {cell.get_text(strip=True)[:80]}")
+while page <= max_pages:
+    print(f"\n--- Scraping page {page} ---")
     
-    link_tag = row.select_one("a[href*='/tournaments/'][href$='/results']")
-    if not link_tag:
-        continue
-
-    # Only add if location in Canada
-    location_cell = cells[2] if len(cells) > 2 else None
-    if not location_cell:
-        continue
-    location_text = location_cell.get_text(strip=True)
+    # Build URL with page parameter
+    page_url = f"{url}&page={page}" if "?" in url else f"{url}?page={page}"
+    res = requests.get(page_url, headers=headers, timeout=20)
+    res.raise_for_status()
+    soup = BeautifulSoup(res.text, "html.parser")
     
-    if not any(province in location_text for province in CANADIAN_PROVINCES):
-        continue
+    rows = soup.select("table tr")
+    if not rows or len(rows) == 1:  
+        print("No more results. Stopping pagination.")
+        break
     
-    href = link_tag["href"]
-    tournament_links.append(BASE_URL + href)
-    print(f"  ✓ Added: {location_text} - {href}\n")
+    page_found = 0
+    for row in rows:
+        cells = row.select("td")
+        if not cells:
+            continue
+        print("Row cells:")
 
+        for i, cell in enumerate(cells):
+            print(f"  Column {i}: {cell.get_text(strip=True)[:80]}")
+        
+        link_tag = row.select_one("a[href*='/tournaments/'][href$='/results']")
+        if not link_tag:
+            continue
 
+        # Only add if location in Canada
+        location_cell = cells[2] if len(cells) > 2 else None
+        if not location_cell:
+            continue
+        location_text = location_cell.get_text(strip=True)
+        
+        if not any(province in location_text for province in CANADIAN_PROVINCES):
+            continue
+        
+        href = link_tag["href"]
+        tournament_links.append(BASE_URL + href)
+        page_found += 1
+        print(f"  ✓ Added: {location_text} - {href}\n")
+    
+    print(f"Found {page_found} Canadian tournaments on page {page}.")
+    
+    page += 1
 # dedupe
 tournament_links = list(dict.fromkeys(tournament_links))
 
