@@ -72,3 +72,76 @@ tournament_links = list(dict.fromkeys(tournament_links))
 
 print("count:", len(tournament_links))
 print(tournament_links[:10])
+
+# Now scrape individual tournament results
+all_results = []
+
+for link in tournament_links:
+    print(f"\n--- Scraping tournament: {link} ---")
+    res = requests.get(link, headers=headers, timeout=20)
+    res.raise_for_status()
+    soup = BeautifulSoup(res.text, "html.parser")
+    
+    # Find all result tables on the page
+    tables = soup.find_all('table')
+    print(f"Found {len(tables)} result tables")
+    
+    for table_idx, table in enumerate(tables):
+        rows = table.find_all('tr')
+        if len(rows) < 2:  # Skip tables with no data rows
+            continue
+            
+        # Extract table header to identify the event
+        header_row = rows[0]
+        table_headers = [cell.get_text(strip=True) for cell in header_row.find_all(['th', 'td'])]
+        event_name = table_headers[0] if table_headers else f"Event {table_idx + 1}"
+        
+        print(f"  Processing table {table_idx + 1}: {event_name} ({len(rows)-1} fencers)")
+        
+        # Process each fencer row
+        for row_idx, row in enumerate(rows[1:], start=1):  # Skip header row
+            cells = row.find_all('td')
+            cell_texts = [cell.get_text(strip=True) for cell in cells]
+            print(f"    row {row_idx}: {len(cells)} cells -> {cell_texts}")
+
+            if len(cells) < 3:  # Skip malformed rows
+                print("      skip: not enough cells")
+                continue
+
+            # Extract fencer data
+            place = cells[0].get_text(strip=True)
+            fencer_name = cells[1].get_text(strip=True)
+            club = cells[2].get_text(strip=True)
+            if not club:
+                club = "unaffiliated"
+            # rating = cells[3].get_text(strip=True)
+            # earned = cells[4].get_text(strip=True)
+            
+            # Skip "No Results Available" entries
+            if "No Results Available" in fencer_name:
+                print("      skip: No Results Available")
+                continue
+
+            result = {
+                'tournament_url': link,
+                'event': event_name,
+                'place': place,
+                'fencer': fencer_name,
+                'club': club
+                # 'rating': rating,
+                # 'earned': earned
+            }
+            all_results.append(result)
+            print(f"      append: {place}. {fencer_name} ({club})")
+
+print(f"\n--- Total results collected: {len(all_results)} ---")
+
+# Optional: Save to CSV
+import csv
+if all_results:
+    with open('fencing_results.csv', 'w', newline='', encoding='utf-8') as csvfile:
+        fieldnames = ['tournament_url', 'event', 'place', 'fencer', 'club', 'rating', 'earned']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(all_results)
+    print("Results saved to fencing_results.csv")
