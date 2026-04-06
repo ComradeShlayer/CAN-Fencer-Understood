@@ -82,21 +82,54 @@ for link in tournament_links:
     res.raise_for_status()
     soup = BeautifulSoup(res.text, "html.parser")
     
+    # Extract tournament metadata from page title
+    # Format: "TOURNAMENT NAME Results | Organizer | City, Province | AskFRED"
+    title_text = soup.find('title')
+    if title_text:
+        title_parts = [p.strip() for p in title_text.get_text().split('|')]
+        tournament_name = title_parts[0].replace(' Results', '')
+        organizer = title_parts[1] if len(title_parts) > 1 else "Unknown"
+        location = title_parts[2] if len(title_parts) > 2 else "Unknown"
+        
+        # Parse location into city and province
+        if ',' in location:
+            city, province = location.split(',', 1)
+            city = city.strip()
+            province = province.strip()
+        else:
+            city = location
+            province = ""
+    else:
+        tournament_name = "Unknown"
+        organizer = "Unknown"
+        city = "Unknown"
+        province = ""
+    
+    print(f"  Tournament: {tournament_name}")
+    print(f"  Organizer: {organizer}")
+    print(f"  Location: {city}, {province}")
+    
     # Find all result tables on the page
     tables = soup.find_all('table')
-    print(f"Found {len(tables)} result tables")
+    print(f"  Found {len(tables)} result tables")
     
     for table_idx, table in enumerate(tables):
         rows = table.find_all('tr')
         if len(rows) < 2:  # Skip tables with no data rows
             continue
-            
-        # Extract table header to identify the event
-        header_row = rows[0]
-        table_headers = [cell.get_text(strip=True) for cell in header_row.find_all(['th', 'td'])]
-        event_name = table_headers[0] if table_headers else f"Event {table_idx + 1}"
         
-        print(f"  Processing table {table_idx + 1}: {event_name} ({len(rows)-1} fencers)")
+        # Get event name from the card header before this table
+        # Find the preceding card-header div that contains the event name
+        table_parent = table.find_parent('div', class_='card')
+        event_name = "Unknown Event"
+        if table_parent:
+            card_header = table_parent.find('div', class_='card-header')
+            if card_header:
+                header_text = card_header.get_text(strip=True)
+                # Extract event name (everything before the competitor count)
+                event_name = header_text.split('Competitors')[0].strip()
+        
+        print(f"    Processing event: {event_name} ({len(rows)-1} fencers)")
         
         # Process each fencer row
         for row_idx, row in enumerate(rows[1:], start=1):  # Skip header row
@@ -123,13 +156,15 @@ for link in tournament_links:
                 continue
 
             result = {
+                'tournament_name': tournament_name,
                 'tournament_url': link,
+                'organizer': organizer,
+                'city': city,
+                'province': province,
                 'event': event_name,
                 'place': place,
                 'fencer': fencer_name,
                 'club': club
-                # 'rating': rating,
-                # 'earned': earned
             }
             all_results.append(result)
             print(f"      append: {place}. {fencer_name} ({club})")
@@ -140,7 +175,7 @@ print(f"\n--- Total results collected: {len(all_results)} ---")
 import csv
 if all_results:
     with open('fencing_results.csv', 'w', newline='', encoding='utf-8') as csvfile:
-        fieldnames = ['tournament_url', 'event', 'place', 'fencer', 'club', 'rating', 'earned']
+        fieldnames = ['tournament_name', 'organizer', 'city', 'province', 'event', 'place', 'fencer', 'club', 'tournament_url']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(all_results)
