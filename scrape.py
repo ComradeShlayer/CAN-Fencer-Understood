@@ -1,6 +1,7 @@
 # this will scrape the fencing data from the website and save it to a csv file
 import requests
 from bs4 import BeautifulSoup
+import time
 
 BASE_URL = "https://www.askfred.net"
 url = "https://www.askfred.net/results?weapon=&gender=&age=&name=&date_by=on&date=&entries_count=&division_id=&location=&radius=&authority=&has_results=1"
@@ -10,10 +11,16 @@ CANADIAN_PROVINCES = ["AB", "BC", "MB", "NB", "NL", "NS", "NT", "NU", "ON", "PE"
 
 headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
     "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
     "Referer": "https://www.askfred.net/results",
+    "DNT": "1",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
 }
 
+time.sleep(1)
 res = requests.get(url, headers=headers, timeout=20)
 res.raise_for_status()
 soup = BeautifulSoup(res.text, "html.parser")
@@ -27,6 +34,7 @@ while page <= max_pages:
     
     # Build URL with page parameter
     page_url = f"{url}&page={page}" if "?" in url else f"{url}?page={page}"
+    time.sleep(1)
     res = requests.get(page_url, headers=headers, timeout=20)
     res.raise_for_status()
     soup = BeautifulSoup(res.text, "html.parser")
@@ -79,6 +87,7 @@ round_results = []
 
 for link in tournament_links:
     print(f"\n--- Scraping tournament: {link} ---")
+    time.sleep(1)
     res = requests.get(link, headers=headers, timeout=20)
     res.raise_for_status()
     soup = BeautifulSoup(res.text, "html.parser")
@@ -121,13 +130,23 @@ for link in tournament_links:
     
     print(f"  Found {len(round_links)} round result links")
     
+    de_links = []
     # Scrape round results for each event
     for round_link in round_links:
         print(f"    Scraping round results: {round_link}")
+        time.sleep(1)
         res = requests.get(round_link, headers=headers, timeout=20)
         res.raise_for_status()
         round_soup = BeautifulSoup(res.text, "html.parser")
         
+        # get de links for this round
+        for a in round_soup.find_all('a', href=True):
+            if 'Next Round' in a.get_text():
+                href = a['href']
+                if href.startswith('/'):
+                    href = 'https://www.askfred.net' + href
+                de_links.append(href)
+
         # Get event name from title
         title = round_soup.find('title')
         if title:
@@ -153,12 +172,12 @@ for link in tournament_links:
             
         # Get column headers
         header_row = rows[0]
-        headers = [cell.get_text(strip=True) for cell in header_row.find_all(['th', 'td'])]
+        table_headers = [cell.get_text(strip=True) for cell in header_row.find_all(['th', 'td'])]
         
         # Process each fencer row
         for row in rows[1:]:
             cells = row.find_all('td')
-            if len(cells) < len(headers):
+            if len(cells) < len(table_headers):
                 continue
                 
             # Extract data
@@ -173,17 +192,17 @@ for link in tournament_links:
                 competitor = competitor_club
                 club = "unaffiliated"
             
-            # Round results (columns 1 to len(headers)-4, since last 4 are V(%), TS, TR, Ind, Pl)
+            # Round results (columns 1 to len(table_headers)-4, since last 4 are V(%), TS, TR, Ind, Pl)
             round_data = {}
-            for i in range(1, len(headers) - 4):
+            for i in range(1, len(table_headers) - 4):
                 if i < len(cells):
                     round_data[f'round_{i}'] = cells[i].get_text(strip=True)
             
-            # Summary stats
-            victory_pct = cells[len(headers)-4].get_text(strip=True) if len(cells) > len(headers)-4 else ""
-            touches_scored = cells[len(headers)-3].get_text(strip=True) if len(cells) > len(headers)-3 else ""
-            touches_received = cells[len(headers)-2].get_text(strip=True) if len(cells) > len(headers)-2 else ""
-            indicator = cells[len(headers)-1].get_text(strip=True) if len(cells) > len(headers)-1 else ""
+            # Summary stats (skip V(%), keep TS, TR, Ind, Pl)
+            touches_scored = cells[len(table_headers)-4].get_text(strip=True) if len(cells) > len(table_headers)-4 else ""
+            touches_received = cells[len(table_headers)-3].get_text(strip=True) if len(cells) > len(table_headers)-3 else ""
+            indicator = cells[len(table_headers)-2].get_text(strip=True) if len(cells) > len(table_headers)-2 else ""
+            place = cells[len(table_headers)-1].get_text(strip=True) if len(cells) > len(table_headers)-1 else ""
             
             round_result = {
                 'tournament_name': tournament_name,
@@ -194,7 +213,7 @@ for link in tournament_links:
                 'event': event_name,
                 'fencer': competitor,
                 'club': club,
-                'victory_pct': victory_pct,
+                'place': place,
                 'touches_scored': touches_scored,
                 'touches_received': touches_received,
                 'indicator': indicator,
@@ -202,6 +221,158 @@ for link in tournament_links:
             }
             round_results.append(round_result)
             print(f"      Added round results for: {competitor} ({club})")
+    # Scrape additional "Next Round" pages discovered while visiting round result pages
+    de_links = list(dict.fromkeys(de_links))
+    print(f"  Found {len(de_links)} next-round links to process")
+    visited_de_links = set()
+    while de_links:
+        de_link = de_links.pop(0)
+        if de_link in visited_de_links:
+            continue
+        visited_de_links.add(de_link)
+
+        print(f"      Scraping next round page: {de_link}")
+        time.sleep(1)
+        res = requests.get(de_link, headers=headers, timeout=20)
+        res.raise_for_status()
+        de_soup = BeautifulSoup(res.text, "html.parser")
+
+        # Collect any further next-round links from this page
+        for a in de_soup.find_all('a', href=True):
+            if 'Next Round' in a.get_text():
+                href = a['href']
+                if href.startswith('/'):
+                    href = 'https://www.askfred.net' + href
+                if href not in visited_de_links and href not in de_links:
+                    de_links.append(href)
+
+        title = de_soup.find('title')
+        if title:
+            title_text = title.get_text()
+            title_parts = title_text.split('|')
+            if len(title_parts) >= 2:
+                event_name = title_parts[1].strip()
+            else:
+                event_name = "Unknown Event"
+        else:
+            event_name = "Unknown Event"
+
+        tables = de_soup.find_all('table')
+        if tables:
+            table = tables[0]
+            rows = table.find_all('tr')
+            if len(rows) < 2:
+                continue
+
+            header_row = rows[0]
+            table_headers = [cell.get_text(strip=True) for cell in header_row.find_all(['th', 'td'])]
+
+            for row in rows[1:]:
+                cells = row.find_all('td')
+                if len(cells) < len(table_headers):
+                    continue
+
+                competitor_club = cells[0].get_text(strip=True)
+                if '(' in competitor_club and competitor_club.endswith(')'):
+                    competitor, club_part = competitor_club.rsplit('(', 1)
+                    club = club_part.rstrip(')')
+                    competitor = competitor.strip()
+                else:
+                    competitor = competitor_club
+                    club = "unaffiliated"
+
+                round_data = {}
+                for i in range(1, len(table_headers) - 4):
+                    if i < len(cells):
+                        round_data[f'round_{i}'] = cells[i].get_text(strip=True)
+
+                touches_scored = cells[len(table_headers)-4].get_text(strip=True) if len(cells) > len(table_headers)-4 else ""
+                touches_received = cells[len(table_headers)-3].get_text(strip=True) if len(cells) > len(table_headers)-3 else ""
+                indicator = cells[len(table_headers)-2].get_text(strip=True) if len(cells) > len(table_headers)-2 else ""
+                place = cells[len(table_headers)-1].get_text(strip=True) if len(cells) > len(table_headers)-1 else ""
+
+                round_result = {
+                    'tournament_name': tournament_name,
+                    'tournament_url': link,
+                    'organizer': organizer,
+                    'city': city,
+                    'province': province,
+                    'event': event_name,
+                    'fencer': competitor,
+                    'club': club,
+                    'place': place,
+                    'touches_scored': touches_scored,
+                    'touches_received': touches_received,
+                    'indicator': indicator,
+                    **round_data
+                }
+                round_results.append(round_result)
+                print(f"        Added next-round result for: {competitor} ({club})")
+        else:
+            de_table = de_soup.find('div', class_='de-table')
+            if not de_table:
+                print(f"        No de-table found on {de_link}")
+                continue
+
+            print(f"        Found de-table, inspecting contents...")
+
+            row_containers = []
+            for child in de_table.find_all(recursive=False):
+                if child.name != 'div':
+                    continue
+                if child.find('div', class_=lambda c: c and 'col' in c and 'd-flex' in c and 'flex-columns' in c):
+                    row_containers.append(child)
+
+            if not row_containers:
+                print(f"        No row containers from direct children, trying parent lookup...")
+                for col in de_table.find_all('div', class_=lambda c: c and 'col' in c and 'd-flex' in c and 'flex-columns' in c):
+                    parent = col.find_parent('div', class_=lambda c: c and 'row' in c)
+                    if parent and parent not in row_containers:
+                        row_containers.append(parent)
+                print(f"        After parent lookup: {len(row_containers)} row containers")
+
+            print(f"        Found {len(row_containers)} DE rows")
+
+            for row in row_containers:
+                cols = row.find_all('div', class_=lambda c: c and 'col' in c)
+                if len(cols) < 5:
+                    continue
+
+                competitor_club = cols[0].get_text(' ', strip=True)
+                if '(' in competitor_club and competitor_club.endswith(')'):
+                    competitor, club_part = competitor_club.rsplit('(', 1)
+                    club = club_part.rstrip(')')
+                    competitor = competitor.strip()
+                else:
+                    competitor = competitor_club
+                    club = 'unaffiliated'
+
+                round_data = {}
+                for i, col in enumerate(cols[1:-4], start=1):
+                    round_data[f'round_{i}'] = col.get_text(' ', strip=True)
+
+                touches_scored = cols[-4].get_text(' ', strip=True)
+                touches_received = cols[-3].get_text(' ', strip=True)
+                indicator = cols[-2].get_text(' ', strip=True)
+                place = cols[-1].get_text(' ', strip=True)
+
+                round_result = {
+                    'tournament_name': tournament_name,
+                    'tournament_url': link,
+                    'organizer': organizer,
+                    'city': city,
+                    'province': province,
+                    'event': event_name,
+                    'fencer': competitor,
+                    'club': club,
+                    'place': place,
+                    'touches_scored': touches_scored,
+                    'touches_received': touches_received,
+                    'indicator': indicator,
+                    **round_data
+                }
+                round_results.append(round_result)
+                print(f"        Added next-round result for: {competitor} ({club})")
     
     for table_idx, table in enumerate(tables):
         rows = table.find_all('tr')
@@ -262,7 +433,7 @@ for link in tournament_links:
 print(f"\n--- Total results collected: {len(all_results)} ---")
 print(f"--- Total round results collected: {len(round_results)} ---")
 
-# Optional: Save to CSV
+# Save to CSV
 import csv
 if all_results:
     with open('fencing_results.csv', 'w', newline='', encoding='utf-8') as csvfile:
@@ -279,7 +450,7 @@ if round_results:
         all_keys.update(result.keys())
     
     round_fieldnames = ['tournament_name', 'organizer', 'city', 'province', 'event', 'fencer', 'club', 
-                       'victory_pct', 'touches_scored', 'touches_received', 'indicator', 'tournament_url'] + \
+                       'place', 'touches_scored', 'touches_received', 'indicator', 'tournament_url'] + \
                       sorted([k for k in all_keys if k.startswith('round_')])
     
     with open('fencing_round_results.csv', 'w', newline='', encoding='utf-8') as csvfile:
