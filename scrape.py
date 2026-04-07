@@ -75,6 +75,7 @@ print(tournament_links[:10])
 
 # Now scrape individual tournament results
 all_results = []
+round_results = []
 
 for link in tournament_links:
     print(f"\n--- Scraping tournament: {link} ---")
@@ -109,9 +110,98 @@ for link in tournament_links:
     print(f"  Organizer: {organizer}")
     print(f"  Location: {city}, {province}")
     
-    # Find all result tables on the page
-    tables = soup.find_all('table')
-    print(f"  Found {len(tables)} result tables")
+    # Find "View Round Results" links for this tournament
+    round_links = []
+    for a in soup.find_all('a', href=True):
+        if 'View Round Results' in a.get_text():
+            href = a['href']
+            if href.startswith('/'):
+                href = 'https://www.askfred.net' + href
+            round_links.append(href)
+    
+    print(f"  Found {len(round_links)} round result links")
+    
+    # Scrape round results for each event
+    for round_link in round_links:
+        print(f"    Scraping round results: {round_link}")
+        res = requests.get(round_link, headers=headers, timeout=20)
+        res.raise_for_status()
+        round_soup = BeautifulSoup(res.text, "html.parser")
+        
+        # Get event name from title
+        title = round_soup.find('title')
+        if title:
+            title_text = title.get_text()
+            # Extract event name from "TOURNAMENT | EVENT | AskFRED"
+            title_parts = title_text.split('|')
+            if len(title_parts) >= 2:
+                event_name = title_parts[1].strip()
+            else:
+                event_name = "Unknown Event"
+        else:
+            event_name = "Unknown Event"
+        
+        # Find the results table
+        tables = round_soup.find_all('table')
+        if not tables:
+            continue
+            
+        table = tables[0]  # Usually the first table
+        rows = table.find_all('tr')
+        if len(rows) < 2:
+            continue
+            
+        # Get column headers
+        header_row = rows[0]
+        headers = [cell.get_text(strip=True) for cell in header_row.find_all(['th', 'td'])]
+        
+        # Process each fencer row
+        for row in rows[1:]:
+            cells = row.find_all('td')
+            if len(cells) < len(headers):
+                continue
+                
+            # Extract data
+            competitor_club = cells[0].get_text(strip=True)
+            
+            # Parse competitor and club
+            if '(' in competitor_club and competitor_club.endswith(')'):
+                competitor, club_part = competitor_club.rsplit('(', 1)
+                club = club_part.rstrip(')')
+                competitor = competitor.strip()
+            else:
+                competitor = competitor_club
+                club = "unaffiliated"
+            
+            # Round results (columns 1 to len(headers)-4, since last 4 are V(%), TS, TR, Ind, Pl)
+            round_data = {}
+            for i in range(1, len(headers) - 4):
+                if i < len(cells):
+                    round_data[f'round_{i}'] = cells[i].get_text(strip=True)
+            
+            # Summary stats
+            victory_pct = cells[len(headers)-4].get_text(strip=True) if len(cells) > len(headers)-4 else ""
+            touches_scored = cells[len(headers)-3].get_text(strip=True) if len(cells) > len(headers)-3 else ""
+            touches_received = cells[len(headers)-2].get_text(strip=True) if len(cells) > len(headers)-2 else ""
+            indicator = cells[len(headers)-1].get_text(strip=True) if len(cells) > len(headers)-1 else ""
+            
+            round_result = {
+                'tournament_name': tournament_name,
+                'tournament_url': link,
+                'organizer': organizer,
+                'city': city,
+                'province': province,
+                'event': event_name,
+                'fencer': competitor,
+                'club': club,
+                'victory_pct': victory_pct,
+                'touches_scored': touches_scored,
+                'touches_received': touches_received,
+                'indicator': indicator,
+                **round_data  # Include all round_X columns
+            }
+            round_results.append(round_result)
+            print(f"      Added round results for: {competitor} ({club})")
     
     for table_idx, table in enumerate(tables):
         rows = table.find_all('tr')
@@ -170,6 +260,7 @@ for link in tournament_links:
             print(f"      append: {place}. {fencer_name} ({club})")
 
 print(f"\n--- Total results collected: {len(all_results)} ---")
+print(f"--- Total round results collected: {len(round_results)} ---")
 
 # Optional: Save to CSV
 import csv
@@ -179,4 +270,20 @@ if all_results:
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(all_results)
-    print("Results saved to fencing_results.csv")
+    print("Final results saved to fencing_results.csv")
+
+if round_results:
+    # Get all possible round columns dynamically
+    all_keys = set()
+    for result in round_results:
+        all_keys.update(result.keys())
+    
+    round_fieldnames = ['tournament_name', 'organizer', 'city', 'province', 'event', 'fencer', 'club', 
+                       'victory_pct', 'touches_scored', 'touches_received', 'indicator', 'tournament_url'] + \
+                      sorted([k for k in all_keys if k.startswith('round_')])
+    
+    with open('fencing_round_results.csv', 'w', newline='', encoding='utf-8') as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=round_fieldnames)
+        writer.writeheader()
+        writer.writerows(round_results)
+    print("Round results saved to fencing_round_results.csv")
